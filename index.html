@@ -2012,8 +2012,27 @@ function lookup(tok){
   const vs = variants(tok);
   for (const v of vs){ const e = MAP.get(v); if (e) return {entry:e, approx:false}; }
   for (const v of vs){ const m = v.match(/^ci ?(\d{5})$/); if (m) return {entry:ciEntry(m[1]), approx:false}; }
-  const f = fuzzy(vs[0] || '');
+  /* spacing and punctuation differences (e.g. text read from a photo): compare without them */
+  if (!CMAP){ CMAP = new Map(); for (const [k, e] of MAP){ const c = compactKey(k); if (c.length > 3 && !CMAP.has(c)) CMAP.set(c, e); } }
+  for (const v of vs){ const e = CMAP.get(compactKey(v)); if (e) return {entry:e, approx:true}; }
+  const f = fuzzy(vs[0] || '') || fuzzyCompact(compactKey(vs[0] || ''));
   return f ? {entry:f, approx:true} : {entry:null, approx:false};
+}
+let CMAP = null;
+function compactKey(s){ return String(s).replace(/[\s\-\/().,'’]/g, ''); }
+function fuzzyCompact(v){
+  if (v.length < 7) return null;
+  const digits = v.replace(/\D/g, '');
+  const thr = digits ? 1 : (v.length <= 10 ? 1 : 2);
+  let best = null, bd = 9, tie = false;
+  for (const [k, e] of CMAP){
+    if (k[0] !== v[0] || Math.abs(k.length - v.length) > thr) continue;
+    if (digits && k.replace(/\D/g, '') !== digits) continue;
+    const d = lev(v, k);
+    if (d < bd){ bd = d; best = e; tie = false; }
+    else if (d === bd && e !== best) tie = true;
+  }
+  return (best && bd <= thr && !tie) ? best : null;
 }
 function analyze(text){
   return splitList(text).map((raw, i) => { const r = lookup(raw); return {pos:i+1, raw, entry:r.entry, approx:r.approx}; });
@@ -2493,6 +2512,11 @@ renderMyths();
   const IN_CLAUDE=!!(window.claude&&window.claude.use);
   const SHARE_URL=IN_CLAUDE?'https://claude.ai/artifact/PfrRhXPP7MSzSRrXRe9GsQ':(location.origin+location.pathname);
   Object.assign(UI.ru,{
+    ph_hint_local:'Сфотографируйте состав крупно, ровно и при хорошем свете. Текст распознаётся прямо на телефоне; в первый раз нужно скачать около 10 МБ.',
+    ph_loading:'Загружаю распознавание текста… {0}%', ph_reading_local:'Читаю текст с фото… {0}%',
+    ph_ok_local:'Текст распознан на телефоне и вставлен. Обязательно сверьте его с упаковкой: мелкий шрифт мог прочитаться с ошибками.',
+    ph_none_local:'Не получилось найти на фото список ингредиентов. Сфотографируйте его крупнее, ровно и без бликов.',
+    ph_net:'Не удалось загрузить распознавание текста. В первый раз для этого нужен интернет.',
     ph_cam:'Камера', ph_pick:'Фото из галереи',
     ph_hint:'Сфотографируйте состав на упаковке крупно и при хорошем свете. Фото отправляется Claude, чтобы распознать текст.',
     ph_reading:'Читаю состав с фото…', ph_stop:'Остановить',
@@ -2508,6 +2532,11 @@ renderMyths();
     share_note:'Ссылка откроется у тех, с кем вы поделились приложением в Claude.'
   });
   Object.assign(UI.uk,{
+    ph_hint_local:'Сфотографуйте склад великим планом, рівно й при доброму світлі. Текст розпізнається просто на телефоні; першого разу потрібно завантажити близько 10 МБ.',
+    ph_loading:'Завантажую розпізнавання тексту… {0}%', ph_reading_local:'Читаю текст із фото… {0}%',
+    ph_ok_local:'Текст розпізнано на телефоні й вставлено. Обов’язково звірте його з упаковкою: дрібний шрифт міг прочитатися з помилками.',
+    ph_none_local:'Не вдалося знайти на фото список інгредієнтів. Сфотографуйте його ближче, рівно й без відблисків.',
+    ph_net:'Не вдалося завантажити розпізнавання тексту. Першого разу для цього потрібен інтернет.',
     ph_cam:'Камера', ph_pick:'Фото з галереї',
     ph_hint:'Сфотографуйте склад на упаковці великим планом і при доброму світлі. Фото надсилається Claude, щоб розпізнати текст.',
     ph_reading:'Читаю склад із фото…', ph_stop:'Зупинити',
@@ -2523,6 +2552,11 @@ renderMyths();
     share_note:'Посилання відкриється в тих, з ким ви поділилися застосунком у Claude.'
   });
   Object.assign(UI.en,{
+    ph_hint_local:'Take a close, straight, well-lit photo of the ingredient list. The text is read right on your phone; the first time, about 10 MB needs to download.',
+    ph_loading:'Loading text recognition… {0}%', ph_reading_local:'Reading the text from the photo… {0}%',
+    ph_ok_local:'Text recognized on your phone and inserted. Be sure to check it against the package: small print may have been misread.',
+    ph_none_local:'Could not find an ingredient list in the photo. Take it closer, straight and without glare.',
+    ph_net:'Could not load text recognition. An internet connection is needed the first time.',
     ph_cam:'Camera', ph_pick:'Photo from library',
     ph_hint:'Take a close, well-lit photo of the ingredient list on the package. The photo is sent to Claude to read the text.',
     ph_reading:'Reading the ingredients from the photo…', ph_stop:'Stop',
@@ -2570,10 +2604,10 @@ renderMyths();
 
   const box=document.querySelector('#photo'),st=document.querySelector('#ph-status'),msg=document.querySelector('#ph-msg'),stop=document.querySelector('#ph-stop');
   let sample=null,ctl=null;
-  let lastKey=null;
-  document.querySelectorAll('.lang button').forEach(b=>b.addEventListener('click',()=>{ if(lastKey&&!st.hidden) msg.textContent=t(lastKey); }));
-  function say(key,busy){
-    lastKey=key;st.hidden=false;st.classList.toggle('busy',!!busy);msg.textContent=t(key);stop.hidden=!busy;
+  let lastKey=null,lastArg=null,mode=null;
+  document.querySelectorAll('.lang button').forEach(b=>b.addEventListener('click',()=>{ if(lastKey&&!st.hidden) msg.textContent=t(lastKey,lastArg); }));
+  function say(key,busy,arg){
+    lastKey=key;lastArg=arg;st.hidden=false;st.classList.toggle('busy',!!busy);msg.textContent=t(key,arg);stop.hidden=!busy;
   }
   const PROMPT='The photo should show the ingredient list (INCI) of a cosmetic or skincare product. '+
     'Transcribe that ingredient list exactly as printed, in the printed order, with the ingredients separated by ", ". '+
@@ -2583,7 +2617,9 @@ renderMyths();
     'Reply with only JSON: {"found": true or false, "inci": "Aqua, Glycerin, ...", "partial": true or false}. '+
     'found is false when the photo shows no ingredient list; partial is true when any [?] was needed.';
   async function read(file){
-    if(!file||!sample) return;
+    if(!file) return;
+    if(mode==='local') return localRead(file);
+    if(!sample) return;
     ctl=new AbortController();
     say('ph_reading',true);
     box.querySelectorAll('label.btn').forEach(l=>l.classList.add('off'));
@@ -2606,19 +2642,130 @@ renderMyths();
       box.querySelectorAll('label.btn').forEach(l=>l.classList.remove('off'));
     }
   }
-  stop.addEventListener('click',()=>{ if(ctl) ctl.abort(); });
+
+  /* ---- on-device text recognition (Tesseract) for the stand-alone app ---- */
+  let worker=null,progFn=null,cancelled=false;
+  function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=()=>rej(new Error('load')); document.head.appendChild(s); }); }
+  async function getWorker(){
+    if(worker) return worker;
+    const cfg=window.__OCR||{};
+    if(!window.Tesseract) await loadScript(cfg.lib||'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');
+    const w=await Tesseract.createWorker('eng',1,Object.assign({logger:m=>{ if(progFn) progFn(m); }},cfg.opts||{}));
+    await w.setParameters({preserve_interword_spaces:'1',tessedit_pageseg_mode:'6'});
+    worker=w; return w;
+  }
+  function stopLocal(){ cancelled=true; if(worker){ try{ worker.terminate(); }catch(e){} worker=null; } st.hidden=true; box.querySelectorAll('label.btn').forEach(l=>l.classList.remove('off')); }
+  async function loadBitmap(file){
+    try{ return await createImageBitmap(file,{imageOrientation:'from-image'}); }
+    catch(e){ return await new Promise((res,rej)=>{ const u=URL.createObjectURL(file),im=new Image(); im.onload=()=>{ URL.revokeObjectURL(u); res(im); }; im.onerror=()=>{ URL.revokeObjectURL(u); rej(new Error('image')); }; im.src=u; }); }
+  }
+  async function prep(file){
+    const bm=await loadBitmap(file);
+    const w0=bm.width,h0=bm.height,big=Math.max(w0,h0);
+    const k=Math.min(2200/big, 4);
+    const W=Math.max(1,Math.round(w0*k)),H=Math.max(1,Math.round(h0*k));
+    const c=document.createElement('canvas'); c.width=W; c.height=H;
+    const x=c.getContext('2d',{willReadFrequently:true}); x.imageSmoothingQuality='high'; x.drawImage(bm,0,0,W,H);
+    /* blurred copy of the page = the lighting; dividing by it evens out shadows and glare */
+    const sw=Math.max(8,Math.round(W/40)),sh=Math.max(8,Math.round(H/40));
+    const s=document.createElement('canvas'); s.width=sw; s.height=sh; const sx=s.getContext('2d'); sx.imageSmoothingQuality='high'; sx.drawImage(c,0,0,sw,sh);
+    const b=document.createElement('canvas'); b.width=W; b.height=H; const bx=b.getContext('2d',{willReadFrequently:true}); bx.imageSmoothingQuality='high'; bx.drawImage(s,0,0,W,H);
+    const img=x.getImageData(0,0,W,H),d=img.data,bd=bx.getImageData(0,0,W,H).data;
+    const n=d.length/4,vals=new Float32Array(n),hist=new Uint32Array(256);
+    for(let i=0,j=0;i<d.length;i+=4,j++){
+      const g=(d[i]*299+d[i+1]*587+d[i+2]*114)/1000, bgv=(bd[i]*299+bd[i+1]*587+bd[i+2]*114)/1000+1;
+      let v=g/bgv*235; v=v>255?255:v; vals[j]=v; hist[v|0]++;
+    }
+    let lo=0,hi=255,acc=0;
+    for(let i=0;i<256;i++){ acc+=hist[i]; if(acc>n*.02){ lo=i; break; } }
+    acc=0; for(let i=255;i>=0;i--){ acc+=hist[i]; if(acc>n*.02){ hi=i; break; } }
+    const span=Math.max(1,hi-lo);
+    for(let i=0,j=0;i<d.length;i+=4,j++){ let g=(vals[j]-lo)*255/span; g=g<0?0:g>255?255:g; d[i]=d[i+1]=d[i+2]=g; }
+    x.putImageData(img,0,0);
+    return c;
+  }
+  function extractInci(raw){
+    let s=String(raw||'').replace(/\r/g,'');
+    s=s.replace(/([A-Za-z])-\n\s*([a-z])/g,'$1$2');
+    const head=/(ingredients?|ingr[eé]dients?|inci|composition|zutaten|ingredienti|ingredientes|ingredi[eë]nten|sk[łl]adniki|состав|склад|інгредієнти|ингредиенты)\s*[:：.;,]/i;
+    const m=s.search(head);
+    if(m>=0) s=s.slice(m).replace(head,'');
+    s=s.replace(/aqua[^,a-z]{0,2}[a-z]?\s?water[^,a-z]{0,2}[a-z]?\s?eau/ig,'Aqua/Water/Eau');
+    s=s.replace(/;/g,',').replace(/([A-Za-z0-9)\]]+)\.(\s+)(?=[A-Za-z])/g,(m,w,sp)=>/^denat$/i.test(w)?m:w+','+sp);
+    s=s.replace(/\n+/g,' ').replace(/[|•·]/g,', ').replace(/\s{2,}/g,' ').replace(/\s*,\s*/g,', ').replace(/(,\s*)+/g,', ').replace(/(\d), (\d)/g,'$1,$2').trim();
+    const end=s.search(/\b(made in|manufactured|distributed|batch|lot\b|exp\b|best before|www\.|https?:|may contain\s*\(?\+\/-)/i);
+    if(end>40) s=s.slice(0,end);
+    return s.replace(/^[,.;:\s]+|[,.;:\s]+$/g,'');
+  }
+  window.__extractInci=extractInci;
+  function score(s){ const it=analyze(s); return {n:it.length,ok:it.filter(i=>i.entry).length}; }
+  /* a comma lost by the OCR glues two ingredients together: split them back when both halves are known */
+  function repair(s){
+    if(!s) return s;
+    return splitList(s).map(tok=>{
+      if(lookup(tok).entry) return tok;
+      const w=tok.split(/\s+/);
+      for(let i=1;i<w.length;i++){
+        const x=w.slice(0,i).join(' '),y=w.slice(i).join(' '),lx=lookup(x),ly=lookup(y);
+        if(lx.entry&&ly.entry&&!lx.approx&&!ly.approx) return x+', '+y;
+      }
+      return tok;
+    }).join(', ');
+  }
+  async function localRead(file){
+    cancelled=false;
+    box.querySelectorAll('label.btn').forEach(l=>l.classList.add('off'));
+    progFn=m=>{ if(cancelled) return; const p=Math.round((m.progress||0)*100); if(m.status==='recognizing text') say('ph_reading_local',true,p); else say('ph_loading',true,p); };
+    say(worker?'ph_reading_local':'ph_loading',true,0);
+    try{
+      const w=await getWorker(); if(cancelled) return;
+      const cv=await prep(file); if(cancelled) return;
+      say('ph_reading_local',true,0);
+      /* first read the photo as one block of text; if little is recognized, let Tesseract find the layout itself and keep the better result */
+      let res=await w.recognize(cv); if(cancelled) return;
+      let inci=repair(extractInci(res&&res.data&&res.data.text)),sc=score(inci);
+      if(sc.ok<6||sc.ok<sc.n*.8){
+        await w.setParameters({tessedit_pageseg_mode:'3'});
+        const res2=await w.recognize(cv); if(cancelled) return;
+        await w.setParameters({tessedit_pageseg_mode:'6'});
+        const inci2=repair(extractInci(res2&&res2.data&&res2.data.text)),sc2=score(inci2);
+        if(sc2.ok>sc.ok){ inci=inci2; sc=sc2; }
+      }
+      if(inci&&(inci.match(/,/g)||[]).length>=2){
+        document.querySelector('#an-in').value=inci;
+        renderAnalysis();
+        say('ph_ok_local',false);
+      }else say('ph_none_local',false);
+    }catch(e){
+      if(cancelled) return;
+      const failedLoad=!worker;
+      if(failedLoad&&!window.Tesseract) say('ph_net',false);
+      else if(e&&e.message==='image') say('ph_bad',false);
+      else say(failedLoad?'ph_net':'ph_err',false);
+    }finally{
+      progFn=null;
+      box.querySelectorAll('label.btn').forEach(l=>l.classList.remove('off'));
+    }
+  }
+  stop.addEventListener('click',()=>{ if(ctl) ctl.abort(); if(mode==='local') stopLocal(); });
   ['#ph-cam','#ph-pick'].forEach(s=>{
     const inp=document.querySelector(s);
     inp.addEventListener('change',()=>{ const f=inp.files&&inp.files[0]; inp.value=''; read(f); });
   });
-  /* light the photo buttons up only where this view can send images to Claude */
+  /* outside Claude: read photos on the device */
+  if(!IN_CLAUDE){
+    mode='local';
+    const hint=box.querySelector('.photo-hint'); hint.dataset.i18n='ph_hint_local'; hint.textContent=t('ph_hint_local');
+    box.hidden=false;
+  }
+  /* inside Claude: light the photo buttons up only where this view can send images to Claude */
   (async()=>{
     try{
       if(!(window.claude&&claude.use)) return;
       const s=await claude.use('sample'); if(!s) return;
       const lim=await s.limits().catch(()=>null);
       if(!lim||!lim.images) return;
-      sample=s;
+      sample=s; mode='claude';
       const types=(lim.images.mediaTypes||[]).join(',');
       if(types){ document.querySelector('#ph-pick').accept=types; }
       box.hidden=false;
