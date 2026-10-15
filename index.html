@@ -547,6 +547,32 @@ html.webkit h1{
   filter:drop-shadow(0 2px 0 rgba(196,72,124,.55)) drop-shadow(0 7px 10px rgba(150,40,90,.35)) !important;
 }
 
+/* =================== gliding selection pills =================== */
+.lang.has-slider,.seg.has-slider{position:relative}
+.has-slider .slide-pill{position:absolute;left:0;top:0;width:0;height:0;z-index:-1;pointer-events:none;opacity:0;
+  border-radius:99px;will-change:transform,width;
+  background-color:var(--c-pink);
+  background-image:radial-gradient(120% 95% at 28% 0%, var(--shade-hi), transparent 58%),linear-gradient(180deg, transparent 50%, var(--shade-lo)),var(--fur-pink);
+  background-size:100% 100%,100% 100%,120px 120px;
+  box-shadow:inset 0 2px 2px var(--rim-hi), inset 0 -4px 7px var(--rim-lo);
+  filter:url(#fuzz-sm) drop-shadow(0 3px 3px var(--drop))}
+.tabs.has-slider .slide-pill{border-radius:22px}
+.seg.has-slider .slide-pill{border-radius:16px}
+.has-slider .slide-pill.ready{
+  transition:transform .46s cubic-bezier(.34,1.32,.5,1), width .46s cubic-bezier(.34,1.32,.5,1), height .3s ease, opacity .2s ease}
+/* the pill replaces the per-button highlight */
+.has-slider button[aria-pressed="true"]::before,.has-slider button[aria-selected="true"]::before{display:none !important}
+.has-slider button{transition:color .3s ease, text-shadow .3s ease}
+html.webkit .has-slider .slide-pill{filter:none;
+  box-shadow:inset 0 2px 2px var(--rim-hi), inset 0 -4px 7px var(--rim-lo),
+    0 0 0 1px var(--halo-pink), 0 0 4px 1px var(--halo-pink), 0 3px 5px var(--drop)}
+/* theme knob: springy glide */
+.theme .knob{transition:transform .5s cubic-bezier(.34,1.4,.5,1)}
+.theme svg{transition:color .35s ease}
+@media (prefers-reduced-motion: reduce){
+  .has-slider .slide-pill.ready,.theme .knob,.has-slider button,.theme svg{transition:none !important}
+}
+
 </style>
 </head>
 <body>
@@ -2384,10 +2410,15 @@ $$('.lang button').forEach(b=>b.addEventListener('click',()=>setLang(b.dataset.l
   try{ th=localStorage.getItem('inci-theme'); }catch(e){}
   if(th!=='light'&&th!=='dark') th=(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';
   function apply(){ root.setAttribute('data-theme',th); btn.setAttribute('aria-checked',th==='dark'?'true':'false'); }
+  let pending=null;
   btn.addEventListener('click',()=>{
     th=th==='dark'?'light':'dark';
     try{ localStorage.setItem('inci-theme',th); }catch(e){}
-    apply();
+    /* let the knob glide across first, then repaint the page in the new theme */
+    btn.setAttribute('aria-checked',th==='dark'?'true':'false');
+    clearTimeout(pending);
+    const still=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+    pending=setTimeout(()=>root.setAttribute('data-theme',th), still?0:300);
   });
   apply();
 })();
@@ -2786,6 +2817,38 @@ renderMyths();
     const lab=document.createElement('span');lab.textContent=t('share_manual')+' ';
     const inp=document.createElement('input');inp.className='share-link';inp.readOnly=true;inp.value=SHARE_URL;
     smsg.append(lab,inp);inp.focus();inp.select();
+  });
+})();
+
+/* =================== gliding selection pills for RU/UA/EN, the tab dock and the segmented switches =================== */
+(function(){
+  const groups=[
+    {el:document.querySelector('.lang'),sel:'button[aria-pressed="true"]'},
+    {el:document.querySelector('.tabs'),sel:'button[aria-selected="true"]'}
+  ].concat([...document.querySelectorAll('.seg')].map(el=>({el,sel:'button[aria-pressed="true"]'})));
+  groups.forEach(g=>{
+    const el=g.el; if(!el) return;
+    el.classList.add('has-slider');
+    const pill=document.createElement('span'); pill.className='slide-pill'; pill.setAttribute('aria-hidden','true');
+    el.insertBefore(pill,el.firstChild);
+    let shown=false,raf=0;
+    function place(){
+      raf=0;
+      const b=el.querySelector(g.sel);
+      if(!b||!el.offsetWidth){ pill.style.opacity='0'; return; }
+      const w=b.offsetWidth,h=b.offsetHeight;
+      if(!w) return;
+      pill.style.width=w+'px'; pill.style.height=h+'px';
+      pill.style.transform='translate('+b.offsetLeft+'px,'+b.offsetTop+'px)';
+      pill.style.opacity='1';
+      if(!shown){ shown=true; requestAnimationFrame(()=>requestAnimationFrame(()=>pill.classList.add('ready'))); }
+    }
+    const schedule=()=>{ if(!raf) raf=requestAnimationFrame(place); };
+    new MutationObserver(schedule).observe(el,{subtree:true,attributes:true,attributeFilter:['aria-pressed','aria-selected'],childList:true,characterData:true});
+    if(window.ResizeObserver) new ResizeObserver(schedule).observe(el);
+    window.addEventListener('resize',schedule);
+    if(document.fonts&&document.fonts.ready) document.fonts.ready.then(schedule);
+    schedule();
   });
 })();
 
